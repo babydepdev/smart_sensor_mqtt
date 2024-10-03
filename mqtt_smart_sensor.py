@@ -1,27 +1,20 @@
 import network
 import time
 from umqtt.simple import MQTTClient
-from machine import RTC, ADC
-import ujson  
+from machine import RTC, ADC, Pin
+import ujson  # For JSON serialization
 import dht
-from machine import Pin
 
-# Wifi Config
 SSID = 'bi2sb2te3'  # กำหนด SSID Wifi
 PASSWORD = '94dda6f6'  # กำหนด Password Wifi
 
-# MQTT config
-mqtt_host = "www.somha-iot.com" #กำหนด HOST Broker MQTT
-mqtt_username = "ajbear" # กำหนด Username MQTT
-mqtt_password = "ajbear1969" # กำหนด Password MQTT
-mqtt_publish_topic = "ajbear/bar" # กำหนด Plublish Topic ที่ต้องการส่งข้อมูล
+mqtt_host = "www.somha-iot.com"
+mqtt_username = "ajbear"
+mqtt_password = "ajbear1969"
+mqtt_publish_topic = "ajbear/bar"
 mqtt_client_id = "beariot_smart_sensor"
 
-# Beariot config
-SITE_ID = "KMe45f01d94cbf"
-DEVICE_ID = 3
-CONNECTION = "MQTT"
-LABEL = "temp"
+mqtt_client = None
 
 # สร้าง Payload เตรียมส่งข้อมูล
 def generate_payload(value):
@@ -33,14 +26,14 @@ def generate_payload(value):
     print(iso_format)
     
     return {
-        "siteID": SITE_ID,
-        "deviceID": DEVICE_ID,
+        "siteID": 'KMe45f01d94cbf',
+        "deviceID": 3,
         "date": iso_format,
-        "offset": -420, 
-        "connection": CONNECTION,
+        "offset": -420,
+        "connection": 'MQTT',
         "tagObj": [{
             "status": True,
-            "label": LABEL,
+            "label": 'temp',
             "value": value,
         },{
             "status": True,
@@ -53,15 +46,29 @@ def generate_payload(value):
 def connect_wifi(ssid, password):
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
-    wlan.connect(ssid, password)
+    
+    if not wlan.isconnected():
+        print("Connecting to Wi-Fi...")
+        wlan.connect(ssid, password)
 
     while not wlan.isconnected():
         time.sleep(1)
-        print("Connecting to Wi-Fi...")
+        print("Waiting for connection...")
+    
     print("Connected to Wi-Fi:", wlan.ifconfig())
+
+# ตรวจสอบและเชื่อมต่อใหม่ถ้า Wi-Fi หลุด
+def ensure_wifi_connected(ssid, password):
+    wlan = network.WLAN(network.STA_IF)
+    
+    if not wlan.isconnected():
+        print("Wi-Fi disconnected, reconnecting...")
+        wlan.disconnect()  # Ensure disconnection before reconnecting
+        connect_wifi(ssid, password)
 
 # เชื่อมต่อ MQTT
 def connect_mqtt():
+    global mqtt_client
     mqtt_client = MQTTClient(
         client_id=mqtt_client_id,
         server=mqtt_host,
@@ -69,38 +76,37 @@ def connect_mqtt():
         password=mqtt_password
     )
     mqtt_client.connect()
-    return mqtt_client
+
+# ตรวจสอบและเชื่อมต่อใหม่ถ้า MQTT หลุด
+def ensure_mqtt_connected():
+    global mqtt_client
+    try:
+        mqtt_client.ping()  # Check MQTT connection with a ping
+    except:
+        print("MQTT disconnected, reconnecting...")
+        connect_mqtt()
 
 # ส่งข้อมูลไปยัง MQTT Broker
 def publish_data(mqtt_client, topic, payload):
-    payload_str = ujson.dumps(payload) 
-    mqtt_client.publish(topic, payload_str.encode('utf-8'))
-    print(f"Data sent successfully: {payload['tagObj'][0]['value']}")
-    
-    
-#อ่านค่าอุณหภูมิ
-def read_temperature():
-    sensor = dht.DHT22(Pin(15))
-    sensor.measure() 
-    temp_value = sensor.temperature()
-    return temp_value
+    payload_str = ujson.dumps(payload)  # Convert the payload to JSON string
+    print(payload_str)
+    mqtt_client.publish(topic, payload_str.encode('utf-8'))  # Send as bytes
 
-# ฟังก์ชั่นหลัก
-def main():
-    print("Starting BeaRiOt MQTT Test")
-    print(f"Sending data to: {mqtt_host}")
-    
-    connect_wifi(SSID, PASSWORD)
-    mqtt_client = connect_mqtt()
-    
+# Main execution
+connect_wifi(SSID, PASSWORD)
+connect_mqtt()
+
+while True:
+    ensure_wifi_connected(SSID, PASSWORD)  # ตรวจสอบ Wi-Fi ทุกลูป
+    ensure_mqtt_connected()  # ตรวจสอบ MQTT ทุกลูป
+
     try:
-        while True:
-            temp_value = read_temperature()
-            payload = generate_payload(temp_value)  
-            publish_data(mqtt_client, mqtt_publish_topic, payload) 
-            time.sleep(3)  
-    except KeyboardInterrupt:
-        print("Test stopped by user")
-        
-if __name__ == "__main__":
-    main()
+        sensor = dht.DHT22(Pin(15))
+        sensor.measure()
+        temp_value = sensor.temperature()
+        payload = generate_payload(temp_value)  # Generate new payload
+        publish_data(mqtt_client, mqtt_publish_topic, payload)  # Publish the data
+    except OSError as e:
+        print("Error reading sensor:", e)
+
+    time.sleep(3)  # Wait for 3 seconds before the next iteration
