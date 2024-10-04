@@ -43,28 +43,46 @@ def generate_payload(value):
     }
 
 # เชื่อมต่อ WIFI
-def connect_wifi(ssid, password):
+def connect_wifi(ssid, password, max_retries=10):
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     
+    # พยายามเชื่อมต่อ Wi-Fi
+    retry_count = 0
     if not wlan.isconnected():
         print("Connecting to Wi-Fi...")
         wlan.connect(ssid, password)
 
-    while not wlan.isconnected():
-        time.sleep(1)
-        print("Waiting for connection...")
+    # ลองเชื่อมต่อหลายครั้งจนสำเร็จหรือเกินจำนวนครั้งที่กำหนด
+    while not wlan.isconnected() and retry_count < max_retries:
+        time.sleep(2)
+        retry_count += 1
+        print(f"Waiting for connection... ({retry_count}/{max_retries})")
     
-    print("Connected to Wi-Fi:", wlan.ifconfig())
+    if wlan.isconnected():
+        print("Connected to Wi-Fi:", wlan.ifconfig())
+        return True
+    else:
+        print("Failed to connect to Wi-Fi.")
+        return False
 
-# ตรวจสอบและเชื่อมต่อใหม่ถ้า Wi-Fi หลุด
+# ตรวจสอบการเชื่อมต่อ WIFI และเชื่อมต่อใหม่ถ้าหลุด
 def ensure_wifi_connected(ssid, password):
     wlan = network.WLAN(network.STA_IF)
     
     if not wlan.isconnected():
         print("Wi-Fi disconnected, reconnecting...")
-        wlan.disconnect()  # Ensure disconnection before reconnecting
-        connect_wifi(ssid, password)
+        wlan.active(False)
+        time.sleep(2)
+        wlan.active(True)
+        
+        # ลองเชื่อมต่อใหม่
+        success = connect_wifi(ssid, password)
+        
+        if not success:
+            print("Wi-Fi reconnect failed. Retrying after delay...")
+            time.sleep(5)  # รอซักครู่ก่อนลองอีกครั้ง
+            connect_wifi(ssid, password)
 
 # เชื่อมต่อ MQTT
 def connect_mqtt():
@@ -82,7 +100,7 @@ def ensure_mqtt_connected():
     global mqtt_client
     try:
         mqtt_client.ping()  # Check MQTT connection with a ping
-    except:
+    except OSError:
         print("MQTT disconnected, reconnecting...")
         connect_mqtt()
 
@@ -93,20 +111,32 @@ def publish_data(mqtt_client, topic, payload):
     mqtt_client.publish(topic, payload_str.encode('utf-8'))  # Send as bytes
 
 # Main execution
-connect_wifi(SSID, PASSWORD)
-connect_mqtt()
-
-while True:
-    ensure_wifi_connected(SSID, PASSWORD)  # ตรวจสอบ Wi-Fi ทุกลูป
-    ensure_mqtt_connected()  # ตรวจสอบ MQTT ทุกลูป
-
+def main():
+    print("Starting BeaRiOt Smart Sensor MQTT")
+    print(f"Sending data to: {mqtt_host}")
+    
+    if not connect_wifi(SSID, PASSWORD):
+        print("Initial Wi-Fi connection failed. Exiting...")
+        return
+    
+    connect_mqtt()  # Ensure MQTT is connected initially
+    
+    sensor = dht.DHT22(Pin(15))  # Initialize the sensor
+    
     try:
-        sensor = dht.DHT22(Pin(15))
-        sensor.measure()
-        temp_value = sensor.temperature()
-        payload = generate_payload(temp_value)  # Generate new payload
-        publish_data(mqtt_client, mqtt_publish_topic, payload)  # Publish the data
+        while True:
+            ensure_wifi_connected(SSID, PASSWORD)  # ตรวจสอบ Wi-Fi ทุกลูป
+            ensure_mqtt_connected()  # ตรวจสอบ MQTT ทุกลูป
+
+            sensor.measure()
+            temp_value = sensor.temperature()  # Read temperature
+            payload = generate_payload(temp_value)  # Generate new payload
+            publish_data(mqtt_client, mqtt_publish_topic, payload)  # Publish the data
+            
+            time.sleep(3)  # Wait for 3 seconds before the next iteration
+            
     except OSError as e:
         print("Error reading sensor:", e)
 
-    time.sleep(3)  # Wait for 3 seconds before the next iteration
+if __name__ == "__main__":
+    main()
