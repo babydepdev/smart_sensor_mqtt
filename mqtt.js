@@ -412,13 +412,14 @@ async function main ()  {
     return
   }  
 
-  let mqInfo = { 
+  let mqInfo = {
     host: 'http://www.somha-iot.com', 
-    username: 'ajbear', 
+    username: 'ajbear',
     password: 'ajbear1969', 
     subscribe: 'ajbear/bar',
     publish: 'ajbear/bar',
   }
+
   if (cfg.mqInfo)  mqInfo = cfg.mqInfo
 
   if (cfg.server)  {
